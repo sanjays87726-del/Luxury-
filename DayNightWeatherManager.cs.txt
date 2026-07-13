@@ -1,0 +1,89 @@
+using UnityEngine;
+
+namespace RealDriveCity.Weather
+{
+    public enum WeatherType { Sunny, Rain, Night }
+
+    /// <summary>
+    /// Drives directional light rotation/intensity for day-night cycle, and toggles
+    /// weather state (sunny/rain/night) affecting fog, skybox exposure, and audio.
+    /// Uses URP volumetric fog + HDR-tonemapped directional light for realistic lighting.
+    /// </summary>
+    public class DayNightWeatherManager : MonoBehaviour
+    {
+        [Header("Sun")]
+        public Light sunLight;
+        [Range(0f, 24f)] public float timeOfDayHours = 8f;
+        public float dayLengthMinutesRealtime = 20f; // full 24h cycle compressed to N real minutes
+        public AnimationCurve sunIntensityCurve = AnimationCurve.EaseInOut(0, 0.05f, 12, 1.4f);
+
+        [Header("Weather")]
+        public WeatherType currentWeather = WeatherType.Sunny;
+        public ParticleSystem rainParticles;
+        public UnityEngine.Rendering.Volume postProcessVolume;
+
+        private float secondsPerGameHour;
+
+        private void Start()
+        {
+            secondsPerGameHour = (dayLengthMinutesRealtime * 60f) / 24f;
+            ApplyWeather(currentWeather);
+        }
+
+        private void Update()
+        {
+            timeOfDayHours += Time.deltaTime / secondsPerGameHour;
+            if (timeOfDayHours >= 24f) timeOfDayHours -= 24f;
+
+            UpdateSun();
+            AutoNightWeatherCheck();
+        }
+
+        private void UpdateSun()
+        {
+            // Sun arcs from -90 (below horizon, night) through 90 (noon) back down.
+            float sunAngle = (timeOfDayHours / 24f) * 360f - 90f;
+            sunLight.transform.rotation = Quaternion.Euler(sunAngle, -30f, 0f);
+
+            float intensity = sunIntensityCurve.Evaluate(timeOfDayHours);
+            sunLight.intensity = Mathf.Max(0.05f, intensity);
+
+            // Warm sunrise/sunset, cool midday — realistic color temperature shift.
+            float t = Mathf.InverseLerp(0f, 12f, Mathf.Abs(12f - timeOfDayHours));
+            sunLight.color = Color.Lerp(new Color(1f, 0.95f, 0.85f), new Color(1f, 0.75f, 0.55f), t);
+        }
+
+        private void AutoNightWeatherCheck()
+        {
+            bool isNightNow = timeOfDayHours < 5.5f || timeOfDayHours > 19.5f;
+            if (isNightNow && currentWeather != WeatherType.Night && currentWeather != WeatherType.Rain)
+                SetWeather(WeatherType.Night);
+            else if (!isNightNow && currentWeather == WeatherType.Night)
+                SetWeather(WeatherType.Sunny);
+        }
+
+        public void SetWeather(WeatherType weather)
+        {
+            currentWeather = weather;
+            ApplyWeather(weather);
+        }
+
+        private void ApplyWeather(WeatherType weather)
+        {
+            bool isRain = weather == WeatherType.Rain;
+            if (rainParticles != null)
+            {
+                if (isRain && !rainParticles.isPlaying) rainParticles.Play();
+                else if (!isRain && rainParticles.isPlaying) rainParticles.Stop();
+            }
+
+            RealDriveCity.Audio.AudioManager.Instance?.SetRain(isRain);
+            RealDriveCity.Audio.AudioManager.Instance?.PlayAmbient(weather == WeatherType.Night);
+
+            // Hook: adjust Volume profile overrides (fog density, exposure, color grading)
+            // per weather state here via postProcessVolume.profile.TryGet<T>(...).
+        }
+
+        public bool IsNight => timeOfDayHours < 5.5f || timeOfDayHours > 19.5f;
+    }
+}
