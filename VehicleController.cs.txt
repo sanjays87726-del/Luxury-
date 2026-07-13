@@ -1,0 +1,206 @@
+using UnityEngine;
+
+namespace RealDriveCity.Vehicles
+{
+    /// <summary>
+    /// Realistic physics-based vehicle controller for mobile.
+    /// Uses Unity WheelColliders for suspension/tire grip, supports manual & automatic
+    /// transmission, drift assist, fuel consumption, and crash damage hooks.
+    /// Attach to a vehicle rigidbody root with 4 wheel colliders assigned.
+    /// </summary>
+    [RequireComponent(typeof(Rigidbody))]
+    public class VehicleController : MonoBehaviour
+    {
+        public enum TransmissionMode { Automatic, Manual }
+        public enum DriveType { FWD, RWD, AWD }
+
+        [Header("Wheels")]
+        public WheelCollider wheelFL, wheelFR, wheelRL, wheelRR;
+        public Transform wheelMeshFL, wheelMeshFR, wheelMeshRL, wheelMeshRR;
+
+        [Header("Engine")]
+        public AnimationCurve torqueCurve = AnimationCurve.EaseInOut(0, 400, 7000, 120);
+        public float maxTorque = 400f;
+        public float maxSteerAngle = 32f;
+        public float brakeTorque = 3000f;
+        public DriveType driveType = DriveType.RWD;
+        public TransmissionMode transmission = TransmissionMode.Automatic;
+        public float[] gearRatios = { 3.5f, 2.2f, 1.5f, 1.1f, 0.9f, 0.7f };
+        public int currentGear = 0;
+        public float currentRPM;
+        public float maxRPM = 7000f;
+
+        [Header("Fuel")]
+        public float fuelCapacityLiters = 55f;
+        public float currentFuel = 55f;
+        public float fuelConsumptionRate = 0.012f; // liters per unit throttle per second
+        public bool outOfFuel;
+
+        [Header("Drift / Grip")]
+        [Range(0f, 1f)] public float driftFactor = 0.35f;
+        public float lateralGripMultiplier = 1.0f;
+
+        [Header("Damage")]
+        [Range(0f, 1f)] public float damageLevel; // 0 = pristine, 1 = destroyed
+        public float damageToPerformanceFactor = 0.6f;
+        public float lastCollisionImpulse;
+
+        [Header("Input (assign from Input System / UI buttons)")]
+        [Range(-1f, 1f)] public float throttleInput;
+        [Range(-1f, 1f)] public float steerInput;
+        public bool brakeInput;
+        public bool handbrakeInput;
+
+        private Rigidbody rb;
+        private const float FUEL_TO_LITERS_WARNING = 5f;
+
+        private void Awake()
+        {
+            rb = GetComponent<Rigidbody>();
+            rb.centerOfMass = new Vector3(0, -0.5f, 0.1f); // lower COM = stability, avoids rollover
+            currentFuel = fuelCapacityLiters;
+        }
+
+        private void FixedUpdate()
+        {
+            if (GameManagerSafeCheckPaused()) return;
+
+            UpdateFuel();
+            HandleSteering();
+            HandleMotor();
+            HandleBraking();
+            UpdateGearRatio();
+            UpdateWheelVisuals();
+        }
+
+        private bool GameManagerSafeCheckPaused()
+        {
+            var gm = RealDriveCity.Core.GameManager.Instance;
+            return gm != null && gm.CurrentState == RealDriveCity.Core.GameManager.GameState.Paused;
+        }
+
+        private void HandleSteering()
+        {
+            float steer = maxSteerAngle * steerInput;
+            wheelFL.steerAngle = steer;
+            wheelFR.steerAngle = steer;
+        }
+
+        private void HandleMotor()
+        {
+            if (outOfFuel) { ApplyMotorTorque(0, 0); return; }
+
+            float performanceScale = Mathf.Lerp(1f, 1f - damageToPerformanceFactor, damageLevel);
+            float torque = torqueCurve.Evaluate(currentRPM) * throttleInput * performanceScale;
+
+            switch (driveType)
+            {
+                case DriveType.FWD:
+                    ApplyMotorTorque(torque, 0, front: true);
+                    break;
+                case DriveType.RWD:
+                    ApplyMotorTorque(0, torque, front: false, rear: true);
+                    break;
+                case DriveType.AWD:
+                    ApplyMotorTorque(torque * 0.5f, torque * 0.5f, front: true, rear: true);
+                    break;
+            }
+        }
+
+        private void ApplyMotorTorque(float frontTorque, float rearTorque, bool front = true, bool rear = true)
+        {
+            if (front) { wheelFL.motorTorque = frontTorque; wheelFR.motorTorque = frontTorque; }
+            if (rear) { wheelRL.motorTorque = rearTorque; wheelRR.motorTorque = rearTorque; }
+        }
+
+        private void HandleBraking()
+        {
+            float brake = brakeInput ? brakeTorque : 0f;
+            wheelFL.brakeTorque = brake;
+            wheelFR.brakeTorque = brake;
+
+            float rearBrake = handbrakeInput ? brakeTorque * 2f : brake;
+            wheelRL.brakeTorque = rearBrake;
+            wheelRR.brakeTorque = rearBrake;
+
+            // Handbrake reduces rear lateral friction -> enables drift
+            ApplyDriftFriction(handbrakeInput);
+        }
+
+        private void ApplyDriftFriction(bool drifting)
+        {
+            WheelFrictionCurve sideFriction = wheelRL.sidewaysFriction;
+            sideFriction.stiffness = drifting ? (1f - driftFactor) * lateralGripMultiplier
+                                               : lateralGripMultiplier;
+            wheelRL.sidewaysFriction = sideFriction;
+            wheelRR.sidewaysFriction = sideFriction;
+        }
+
+        private void UpdateGearRatio()
+        {
+            // Approximate RPM from average driven wheel RPM and current gear ratio.
+            float wheelRPM = (Mathf.Abs(wheelRL.rpm) + Mathf.Abs(wheelRR.rpm)) * 0.5f;
+            float ratio = currentGear < gearRatios.Length ? gearRatios[currentGear] : 1f;
+            currentRPM = Mathf.Clamp(wheelRPM * ratio * 3.6f, 0, maxRPM);
+
+            if (transmission == TransmissionMode.Automatic)
+            {
+                if (currentRPM > maxRPM * 0.85f && currentGear < gearRatios.Length - 1)
+                    currentGear++;
+                else if (currentRPM < maxRPM * 0.25f && currentGear > 0)
+                    currentGear--;
+            }
+        }
+
+        public void ShiftGearManual(int direction)
+        {
+            if (transmission != TransmissionMode.Manual) return;
+            currentGear = Mathf.Clamp(currentGear + direction, 0, gearRatios.Length - 1);
+        }
+
+        private void UpdateFuel()
+        {
+            if (Mathf.Abs(throttleInput) > 0.01f && !outOfFuel)
+            {
+                currentFuel -= fuelConsumptionRate * Mathf.Abs(throttleInput) * Time.fixedDeltaTime;
+                currentFuel = Mathf.Max(0, currentFuel);
+                outOfFuel = currentFuel <= 0f;
+            }
+        }
+
+        public void Refuel(float liters)
+        {
+            currentFuel = Mathf.Min(fuelCapacityLiters, currentFuel + liters);
+            outOfFuel = currentFuel <= 0f;
+        }
+
+        private void UpdateWheelVisuals()
+        {
+            ApplyWheelTransform(wheelFL, wheelMeshFL);
+            ApplyWheelTransform(wheelFR, wheelMeshFR);
+            ApplyWheelTransform(wheelRL, wheelMeshRL);
+            ApplyWheelTransform(wheelRR, wheelMeshRR);
+        }
+
+        private void ApplyWheelTransform(WheelCollider col, Transform mesh)
+        {
+            if (mesh == null) return;
+            col.GetWorldPose(out Vector3 pos, out Quaternion rot);
+            mesh.SetPositionAndRotation(pos, rot);
+        }
+
+        private void OnCollisionEnter(Collision collision)
+        {
+            float impulse = collision.impulse.magnitude / Mathf.Max(rb.mass, 1f);
+            lastCollisionImpulse = impulse;
+            if (impulse > 3f) // impact severity threshold — tune per vehicle class
+            {
+                float damageAdd = Mathf.Clamp01(impulse / 40f);
+                damageLevel = Mathf.Clamp01(damageLevel + damageAdd);
+                // Hook: trigger crumple-mesh deformation / particle sparks / camera shake here.
+            }
+        }
+
+        public bool IsLowFuel() => currentFuel <= FUEL_TO_LITERS_WARNING;
+    }
+}

@@ -1,0 +1,63 @@
+using UnityEngine;
+
+namespace RealDriveCity.Core
+{
+    /// <summary>
+    /// Central game state controller. Persistent singleton across scenes.
+    /// Owns references to major subsystems and global game state (pause, time scale, mode).
+    /// </summary>
+    public class GameManager : MonoBehaviour
+    {
+        public static GameManager Instance { get; private set; }
+
+        public enum GameState { Loading, Playing, Paused, Menu, GameOver }
+        public GameState CurrentState { get; private set; } = GameState.Loading;
+
+        [Header("Player References")]
+        public GameObject playerCharacter;
+        public GameObject currentVehicle;
+        public bool playerInVehicle;
+
+        [Header("Global Settings")]
+        [Range(0, 3)] public int graphicsQualityLevel = 2; // 0=Low,1=Med,2=High,3=Ultra
+        public bool useMetricUnits = true;
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+            Application.targetFrameRate = 60;
+            QualitySettings.vSyncCount = 0; // manual frame rate control for mobile
+        }
+
+        public void SetState(GameState newState)
+        {
+            CurrentState = newState;
+            Time.timeScale = (newState == GameState.Paused) ? 0f : 1f;
+        }
+
+        public void EnterVehicle(GameObject vehicle)
+        {
+            currentVehicle = vehicle;
+            playerInVehicle = true;
+        }
+
+        public void ExitVehicle()
+        {
+            currentVehicle = null;
+            playerInVehicle = false;
+        }
+
+        public void ApplyGraphicsQuality(int level)
+        {
+            graphicsQualityLevel = level;
+            QualitySettings.SetQualityLevel(level, true);
+            // Hook: notify WeatherManager / PostProcess volumes to adjust effect intensity.
+        }
+    }
+}

@@ -1,0 +1,128 @@
+using UnityEngine;
+
+namespace RealDriveCity.Character
+{
+    /// <summary>
+    /// Third/first-person character controller: walk, run, jump, swim, climb,
+    /// and enter/exit vehicles. Drives an Animator via blend parameters and plays
+    /// footstep audio via AnimationEvents (hook FootstepEvent from foot-contact frames).
+    /// </summary>
+    [RequireComponent(typeof(CharacterController))]
+    [RequireComponent(typeof(Animator))]
+    public class PlayerCharacterController : MonoBehaviour
+    {
+        [Header("Movement")]
+        public float walkSpeed = 1.6f;
+        public float runSpeed = 5.5f;
+        public float swimSpeed = 2.2f;
+        public float jumpHeight = 1.2f;
+        public float gravity = -18f;
+        public float climbSpeed = 1.5f;
+
+        [Header("State")]
+        public bool isSwimming;
+        public bool isClimbing;
+        public bool isInVehicle;
+
+        [Header("Input (assign via Input System / on-screen joystick)")]
+        public Vector2 moveInput;
+        public bool runHeld;
+        public bool jumpPressed;
+
+        [Header("Audio")]
+        public AudioSource footstepSource;
+        public AudioClip[] footstepClipsConcrete;
+        public AudioClip[] footstepClipsGrass;
+
+        private CharacterController controller;
+        private Animator animator;
+        private Vector3 velocity;
+        private static readonly int SpeedHash = Animator.StringToHash("Speed");
+        private static readonly int SwimHash = Animator.StringToHash("IsSwimming");
+        private static readonly int ClimbHash = Animator.StringToHash("IsClimbing");
+        private static readonly int JumpHash = Animator.StringToHash("Jump");
+
+        private void Awake()
+        {
+            controller = GetComponent<CharacterController>();
+            animator = GetComponent<Animator>();
+        }
+
+        private void Update()
+        {
+            if (isInVehicle) return; // vehicle controller owns transform while driving
+
+            if (isSwimming) HandleSwim();
+            else if (isClimbing) HandleClimb();
+            else HandleGroundMovement();
+
+            UpdateAnimator();
+        }
+
+        private void HandleGroundMovement()
+        {
+            Vector3 move = (transform.right * moveInput.x + transform.forward * moveInput.y);
+            float speed = runHeld ? runSpeed : walkSpeed;
+            controller.Move(move * speed * Time.deltaTime);
+
+            if (controller.isGrounded)
+            {
+                velocity.y = -2f;
+                if (jumpPressed)
+                {
+                    velocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
+                    animator.SetTrigger(JumpHash);
+                }
+            }
+            velocity.y += gravity * Time.deltaTime;
+            controller.Move(velocity * Time.deltaTime);
+        }
+
+        private void HandleSwim()
+        {
+            Vector3 move = new Vector3(moveInput.x, 0, moveInput.y);
+            controller.Move(transform.TransformDirection(move) * swimSpeed * Time.deltaTime);
+        }
+
+        private void HandleClimb()
+        {
+            Vector3 move = new Vector3(0, moveInput.y, 0);
+            controller.Move(move * climbSpeed * Time.deltaTime);
+        }
+
+        private void UpdateAnimator()
+        {
+            float planarSpeed = new Vector2(moveInput.x, moveInput.y).magnitude * (runHeld ? 1f : 0.5f);
+            animator.SetFloat(SpeedHash, planarSpeed, 0.1f, Time.deltaTime);
+            animator.SetBool(SwimHash, isSwimming);
+            animator.SetBool(ClimbHash, isClimbing);
+        }
+
+        /// <summary>Called via Animation Event on footstep contact frames.</summary>
+        public void FootstepEvent(int surfaceType)
+        {
+            if (footstepSource == null) return;
+            AudioClip[] clips = surfaceType == 0 ? footstepClipsConcrete : footstepClipsGrass;
+            if (clips == null || clips.Length == 0) return;
+            footstepSource.PlayOneShot(clips[Random.Range(0, clips.Length)]);
+        }
+
+        public void EnterVehicle(Transform seat, GameObject vehicle)
+        {
+            isInVehicle = true;
+            controller.enabled = false;
+            transform.SetPositionAndRotation(seat.position, seat.rotation);
+            transform.SetParent(seat);
+            RealDriveCity.Core.GameManager.Instance?.EnterVehicle(vehicle);
+        }
+
+        public void ExitVehicle(Transform exitPoint)
+        {
+            transform.SetParent(null);
+            transform.SetPositionAndRotation(exitPoint.position, exitPoint.rotation);
+            controller.enabled = true;
+            isInVehicle = false;
+            RealDriveCity.Core.GameManager.Instance?.ExitVehicle();
+        }
+    }
+}
