@@ -1,0 +1,61 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace RealDriveCity.Optimization
+{
+    /// <summary>
+    /// Periodically disables AI (pedestrians/traffic) far from the player and re-enables
+    /// them when the player approaches — combined with Unity's built-in Occlusion Culling
+    /// (bake via Window > Rendering > Occlusion Culling) and per-renderer LOD Groups,
+    /// this keeps active agent count and draw calls bounded regardless of world size.
+    /// Runs on a staggered timer, not every frame, to keep CPU cost negligible.
+    /// </summary>
+    public class CullingController : MonoBehaviour
+    {
+        [Header("Target")]
+        public Transform player;
+
+        [Header("Culling Distances")]
+        public float activateDistance = 80f;
+        public float deactivateDistance = 110f; // hysteresis gap avoids activation flicker at the boundary
+
+        [Header("Performance")]
+        public float checkIntervalSeconds = 0.5f;
+        public int maxChecksPerTick = 40; // spread cost across ticks for large agent counts
+
+        private readonly List<GameObject> trackedAgents = new List<GameObject>();
+        private float timer;
+        private int cursor;
+
+        public void Register(GameObject agent) => trackedAgents.Add(agent);
+        public void Unregister(GameObject agent) => trackedAgents.Remove(agent);
+
+        private void Update()
+        {
+            timer += Time.deltaTime;
+            if (timer < checkIntervalSeconds || player == null) return;
+            timer = 0f;
+
+            int processed = 0;
+            int count = trackedAgents.Count;
+            if (count == 0) return;
+
+            while (processed < maxChecksPerTick && processed < count)
+            {
+                cursor = (cursor + 1) % count;
+                GameObject agent = trackedAgents[cursor];
+                if (agent == null) { processed++; continue; }
+
+                float dist = Vector3.Distance(agent.transform.position, player.position);
+                bool shouldBeActive = agent.activeSelf
+                    ? dist < deactivateDistance   // already active: only turn off past the far threshold
+                    : dist < activateDistance;    // inactive: only turn on within the near threshold
+
+                if (agent.activeSelf != shouldBeActive)
+                    agent.SetActive(shouldBeActive);
+
+                processed++;
+            }
+        }
+    }
+}

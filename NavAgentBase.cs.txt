@@ -1,0 +1,51 @@
+using UnityEngine;
+using UnityEngine.AI;
+
+namespace RealDriveCity.AI
+{
+    /// <summary>
+    /// Shared base for all NavMesh-driven AI (pedestrians, traffic, police, animals).
+    /// Provides a lightweight FSM hook and common agent utilities so subclasses stay lean.
+    /// </summary>
+    [RequireComponent(typeof(NavMeshAgent))]
+    public abstract class NavAgentBase : MonoBehaviour
+    {
+        protected NavMeshAgent agent;
+        public enum AIState { Idle, Moving, Reacting, Fleeing, Stopped }
+        public AIState currentState = AIState.Idle;
+
+        [Header("Perception")]
+        public float sightRange = 20f;
+        public LayerMask playerLayer;
+
+        protected virtual void Awake()
+        {
+            agent = GetComponent<NavMeshAgent>();
+        }
+
+        protected virtual void Update()
+        {
+            TickState();
+        }
+
+        /// <summary>Subclasses implement per-state behavior here.</summary>
+        protected abstract void TickState();
+
+        protected bool PlayerInSight(Transform player)
+        {
+            if (player == null) return false;
+            float dist = Vector3.Distance(transform.position, player.position);
+            if (dist > sightRange) return false;
+
+            Vector3 dir = (player.position - transform.position).normalized;
+            if (Physics.Raycast(transform.position + Vector3.up, dir, out RaycastHit hit, sightRange))
+                return hit.transform == player || ((1 << hit.transform.gameObject.layer) & playerLayer) != 0;
+            return false;
+        }
+
+        public void SetDestinationSafe(Vector3 pos)
+        {
+            if (agent.isOnNavMesh) agent.SetDestination(pos);
+        }
+    }
+}

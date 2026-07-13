@@ -1,0 +1,109 @@
+using UnityEngine;
+
+namespace RealDriveCity.AI
+{
+    /// <summary>
+    /// Pedestrian AI: wanders between waypoints (sidewalks/parks), pauses at crosswalks
+    /// for traffic, and flees if a vehicle approaches too fast (basic self-preservation).
+    /// Designed to run cheaply — hundreds can exist if culled/pooled (see PoolManager + CullingController).
+    /// </summary>
+    public class PedestrianAI : NavAgentBase
+    {
+        [Header("Wander")]
+        public Transform[] waypoints;
+        public float waypointReachedDistance = 1.0f;
+        public float idlePauseSeconds = 2f;
+        private int currentWaypointIndex;
+        private float idleTimer;
+
+        [Header("Crosswalk")]
+        public bool isAtCrosswalk;
+        public float vehicleDangerSpeedThreshold = 4f;
+        public float vehicleDangerDistance = 6f;
+
+        [Header("Animation")]
+        public Animator animator;
+        private static readonly int SpeedHash = Animator.StringToHash("Speed");
+
+        protected override void Awake()
+        {
+            base.Awake();
+            agent.speed = Random.Range(1.2f, 1.8f);
+            currentState = AIState.Moving;
+            PickNextWaypoint();
+        }
+
+        protected override void TickState()
+        {
+            switch (currentState)
+            {
+                case AIState.Moving:
+                    CheckCrosswalkSafety();
+                    if (!agent.pathPending && agent.remainingDistance <= waypointReachedDistance)
+                    {
+                        currentState = AIState.Idle;
+                        idleTimer = idlePauseSeconds;
+                    }
+                    break;
+
+                case AIState.Idle:
+                    idleTimer -= Time.deltaTime;
+                    if (idleTimer <= 0f)
+                    {
+                        PickNextWaypoint();
+                        currentState = AIState.Moving;
+                    }
+                    break;
+
+                case AIState.Fleeing:
+                    // Handled by DetectNearbyVehicleDanger; auto-recovers after a short duration.
+                    break;
+            }
+
+            if (animator != null)
+                animator.SetFloat(SpeedHash, agent.velocity.magnitude, 0.15f, Time.deltaTime);
+        }
+
+        private void PickNextWaypoint()
+        {
+            if (waypoints == null || waypoints.Length == 0) return;
+            currentWaypointIndex = Random.Range(0, waypoints.Length);
+            SetDestinationSafe(waypoints[currentWaypointIndex].position);
+        }
+
+        private void CheckCrosswalkSafety()
+        {
+            if (!isAtCrosswalk) return;
+
+            Collider[] nearby = Physics.OverlapSphere(transform.position, vehicleDangerDistance);
+            foreach (var col in nearby)
+            {
+                var vehicle = col.GetComponentInParent<RealDriveCity.Vehicles.VehicleController>();
+                if (vehicle == null) continue;
+
+                Rigidbody vRb = vehicle.GetComponent<Rigidbody>();
+                if (vRb != null && vRb.linearVelocity.magnitude > vehicleDangerSpeedThreshold)
+                {
+                    agent.isStopped = true; // wait for vehicle to pass
+                    return;
+                }
+            }
+            agent.isStopped = false;
+        }
+
+        /// <summary>Called by a trigger volume when a fast vehicle enters personal space.</summary>
+        public void OnNearMiss()
+        {
+            currentState = AIState.Fleeing;
+            Vector3 fleeDir = (transform.position - transform.forward).normalized;
+            SetDestinationSafe(transform.position + fleeDir * 5f);
+            Invoke(nameof(RecoverFromFlee), 3f);
+        }
+
+        private void RecoverFromFlee()
+        {
+            currentState = AIState.Idle;
+            idleTimer = 1f;
+        }
+    }
+}

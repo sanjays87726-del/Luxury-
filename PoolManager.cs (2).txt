@@ -1,0 +1,75 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace RealDriveCity.Optimization
+{
+    /// <summary>
+    /// Generic prefab pooling system. Critical on mobile: Instantiate/Destroy causes GC
+    /// allocation spikes that drop frames. Use for pedestrians, traffic cars, bullet-style
+    /// VFX, debris, and any frequently spawned object.
+    /// </summary>
+    public class PoolManager : MonoBehaviour
+    {
+        public static PoolManager Instance { get; private set; }
+
+        [System.Serializable]
+        public class Pool
+        {
+            public string id;
+            public GameObject prefab;
+            public int prewarmCount = 10;
+        }
+
+        public List<Pool> pools = new List<Pool>();
+        private readonly Dictionary<string, Queue<GameObject>> poolDict = new Dictionary<string, Queue<GameObject>>();
+        private readonly Dictionary<string, GameObject> prefabLookup = new Dictionary<string, GameObject>();
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+
+            foreach (var pool in pools)
+                Prewarm(pool);
+        }
+
+        private void Prewarm(Pool pool)
+        {
+            var queue = new Queue<GameObject>();
+            prefabLookup[pool.id] = pool.prefab;
+
+            for (int i = 0; i < pool.prewarmCount; i++)
+            {
+                GameObject obj = Instantiate(pool.prefab, transform);
+                obj.SetActive(false);
+                queue.Enqueue(obj);
+            }
+            poolDict[pool.id] = queue;
+        }
+
+        public GameObject Spawn(string id, Vector3 position, Quaternion rotation)
+        {
+            if (!poolDict.TryGetValue(id, out var queue))
+            {
+                Debug.LogWarning($"[PoolManager] No pool registered for id '{id}'");
+                return null;
+            }
+
+            GameObject obj = queue.Count > 0 ? queue.Dequeue() : Instantiate(prefabLookup[id], transform);
+            obj.transform.SetPositionAndRotation(position, rotation);
+            obj.SetActive(true);
+            return obj;
+        }
+
+        public void Despawn(string id, GameObject obj)
+        {
+            obj.SetActive(false);
+            obj.transform.SetParent(transform);
+            if (poolDict.TryGetValue(id, out var queue))
+                queue.Enqueue(obj);
+            else
+                Destroy(obj); // unregistered pool id — fall back to normal destroy
+        }
+    }
+}

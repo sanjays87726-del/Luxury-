@@ -1,0 +1,79 @@
+using UnityEngine;
+
+namespace RealDriveCity.AI
+{
+    /// <summary>
+    /// AI traffic vehicle: follows a lane spline of waypoints, obeys traffic light state,
+    /// brakes for obstacles ahead via raycast, and drives an attached VehicleController's
+    /// throttle/steer/brake inputs (reuses real vehicle physics, not a fake kinematic mover).
+    /// </summary>
+    [RequireComponent(typeof(RealDriveCity.Vehicles.VehicleController))]
+    public class TrafficAI : NavAgentBase
+    {
+        [Header("Lane Following")]
+        public Transform[] laneWaypoints;
+        public float waypointReachedDistance = 4f;
+        public float steerSensitivity = 2.5f;
+        private int currentWaypointIndex;
+
+        [Header("Obstacle Avoidance")]
+        public float obstacleCheckDistance = 12f;
+        public LayerMask obstacleLayers;
+
+        [Header("Traffic Light")]
+        public bool stoppedAtRedLight;
+
+        private RealDriveCity.Vehicles.VehicleController vehicle;
+
+        protected override void Awake()
+        {
+            base.Awake();
+            agent.enabled = false; // vehicles use physics driving, not NavMeshAgent movement directly;
+                                    // NavMeshAgent here is retained only for potential path queries.
+            vehicle = GetComponent<RealDriveCity.Vehicles.VehicleController>();
+            currentState = AIState.Moving;
+        }
+
+        protected override void TickState()
+        {
+            if (laneWaypoints == null || laneWaypoints.Length == 0) return;
+            if (stoppedAtRedLight) { ApplyBrake(); return; }
+
+            Transform target = laneWaypoints[currentWaypointIndex];
+            float dist = Vector3.Distance(transform.position, target.position);
+
+            if (dist < waypointReachedDistance)
+                currentWaypointIndex = (currentWaypointIndex + 1) % laneWaypoints.Length;
+
+            DriveTowards(target.position);
+        }
+
+        private void DriveTowards(Vector3 targetPos)
+        {
+            Vector3 localTarget = transform.InverseTransformPoint(targetPos);
+            float steer = Mathf.Clamp(localTarget.x / Mathf.Max(localTarget.magnitude, 0.1f) * steerSensitivity, -1f, 1f);
+
+            bool blocked = Physics.Raycast(transform.position + Vector3.up, transform.forward,
+                out RaycastHit hit, obstacleCheckDistance, obstacleLayers);
+
+            float throttle = blocked ? 0f : 0.55f;
+            bool brake = blocked && hit.distance < obstacleCheckDistance * 0.5f;
+
+            vehicle.steerInput = steer;
+            vehicle.throttleInput = throttle;
+            vehicle.brakeInput = brake;
+        }
+
+        private void ApplyBrake()
+        {
+            vehicle.throttleInput = 0f;
+            vehicle.brakeInput = true;
+        }
+
+        /// <summary>Called by a TrafficLightController when this lane's signal changes.</summary>
+        public void SetTrafficLightState(bool isRed)
+        {
+            stoppedAtRedLight = isRed;
+        }
+    }
+}

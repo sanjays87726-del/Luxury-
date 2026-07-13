@@ -1,0 +1,41 @@
+using UnityEngine;
+
+namespace RealDriveCity.Optimization
+{
+    /// <summary>
+    /// Adjusts global LOD bias and shadow distance based on the selected graphics quality
+    /// level. Actual per-object LOD levels are authored on each prefab via Unity's built-in
+    /// LODGroup component (Low/Med/High/Ultra mesh + material variants) — this script only
+    /// tunes the global transition distances so low-end (Snapdragon/MediaTek mid-range)
+    /// devices switch to cheaper meshes sooner.
+    /// </summary>
+    public class LODManager : MonoBehaviour
+    {
+        [System.Serializable]
+        public struct QualityProfile
+        {
+            public float lodBias;          // higher = LODs switch later (more detail, more cost)
+            public float shadowDistance;
+            public int maxShadowCascades;
+        }
+
+        [Header("Profiles: index 0=Low,1=Med,2=High,3=Ultra")]
+        public QualityProfile[] profiles = new QualityProfile[]
+        {
+            new QualityProfile { lodBias = 0.5f, shadowDistance = 40f, maxShadowCascades = 1 },
+            new QualityProfile { lodBias = 0.75f, shadowDistance = 70f, maxShadowCascades = 2 },
+            new QualityProfile { lodBias = 1.0f, shadowDistance = 110f, maxShadowCascades = 4 },
+            new QualityProfile { lodBias = 1.3f, shadowDistance = 150f, maxShadowCascades = 4 },
+        };
+
+        public void ApplyProfile(int qualityIndex)
+        {
+            qualityIndex = Mathf.Clamp(qualityIndex, 0, profiles.Length - 1);
+            var p = profiles[qualityIndex];
+
+            QualitySettings.lodBias = p.lodBias;
+            QualitySettings.shadowDistance = p.shadowDistance;
+            QualitySettings.shadowCascades = p.maxShadowCascades;
+        }
+    }
+}

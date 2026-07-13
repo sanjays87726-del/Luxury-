@@ -1,0 +1,87 @@
+using UnityEngine;
+
+namespace RealDriveCity.AI
+{
+    /// <summary>
+    /// Police vehicle AI: patrols lane waypoints like normal traffic until it detects
+    /// a "wanted" player (flagged externally by a crime/heat system), then switches to
+    /// pursuit — chasing the player's transform directly with sirens active.
+    /// </summary>
+    public class PoliceAI : TrafficAI
+    {
+        [Header("Pursuit")]
+        public Transform playerTarget;
+        public bool isPursuing;
+        public float pursuitDetectionRange = 25f;
+        public float pursuitSteerSensitivity = 3.5f;
+        public AudioSource sirenAudioSource;
+
+        [Header("Pursuit Driving")]
+        public float pursuitThrottle = 0.9f;
+
+        private RealDriveCity.Vehicles.VehicleController vehicleRef;
+
+        protected override void Awake()
+        {
+            base.Awake();
+            vehicleRef = GetComponent<RealDriveCity.Vehicles.VehicleController>();
+        }
+
+        protected override void TickState()
+        {
+            EvaluatePursuitTrigger();
+
+            if (isPursuing && playerTarget != null)
+            {
+                PursuePlayer();
+            }
+            else
+            {
+                base.TickState(); // fall back to normal patrol behavior
+            }
+        }
+
+        private void EvaluatePursuitTrigger()
+        {
+            if (playerTarget == null) return;
+            float dist = Vector3.Distance(transform.position, playerTarget.position);
+
+            if (!isPursuing && dist <= pursuitDetectionRange && PlayerIsWanted())
+                StartPursuit();
+            else if (isPursuing && dist > pursuitDetectionRange * 2.5f)
+                StopPursuit(); // lost the player — abandon chase
+        }
+
+        /// <summary>
+        /// Hook point: wire this to a global "wanted level" / heat system.
+        /// Returns true if the player currently has an active crime flag.
+        /// </summary>
+        private bool PlayerIsWanted()
+        {
+            var gm = RealDriveCity.Core.GameManager.Instance;
+            return gm != null; // placeholder — replace with gm.WantedLevel > 0 once heat system exists
+        }
+
+        private void PursuePlayer()
+        {
+            Vector3 localTarget = transform.InverseTransformPoint(playerTarget.position);
+            float steer = Mathf.Clamp(localTarget.x / Mathf.Max(localTarget.magnitude, 0.1f) * pursuitSteerSensitivity, -1f, 1f);
+
+            vehicleRef.steerInput = steer;
+            vehicleRef.throttleInput = pursuitThrottle;
+            vehicleRef.brakeInput = false;
+        }
+
+        public void StartPursuit()
+        {
+            isPursuing = true;
+            if (sirenAudioSource != null && !sirenAudioSource.isPlaying) sirenAudioSource.Play();
+        }
+
+        public void StopPursuit()
+        {
+            isPursuing = false;
+            if (sirenAudioSource != null) sirenAudioSource.Stop();
+        }
+    }
+}
