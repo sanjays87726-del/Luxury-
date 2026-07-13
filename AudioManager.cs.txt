@@ -1,0 +1,85 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace RealDriveCity.Audio
+{
+    /// <summary>
+    /// Central 3D audio manager. Pools AudioSources to avoid runtime allocation
+    /// (mobile GC spikes kill frame pacing). Handles engine loops, ambient city,
+    /// rain, and one-shot SFX with distance-based spatialization.
+    /// </summary>
+    public class AudioManager : MonoBehaviour
+    {
+        public static AudioManager Instance { get; private set; }
+
+        [Header("Mixer Groups")]
+        public UnityEngine.Audio.AudioMixerGroup engineGroup;
+        public UnityEngine.Audio.AudioMixerGroup ambientGroup;
+        public UnityEngine.Audio.AudioMixerGroup sfxGroup;
+
+        [Header("Ambient Loops")]
+        public AudioClip citySunnyAmbience;
+        public AudioClip cityNightAmbience;
+        public AudioClip rainLoop;
+
+        private AudioSource ambientSource;
+        private AudioSource rainSource;
+        private readonly Queue<AudioSource> pooledOneShots = new Queue<AudioSource>();
+        private const int POOL_SIZE = 16;
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+
+            ambientSource = CreateSource("AmbientLoop", ambientGroup, loop: true, spatial: 0f);
+            rainSource = CreateSource("RainLoop", ambientGroup, loop: true, spatial: 0f);
+
+            for (int i = 0; i < POOL_SIZE; i++)
+            {
+                var src = CreateSource($"OneShot_{i}", sfxGroup, loop: false, spatial: 1f);
+                src.playOnAwake = false;
+                pooledOneShots.Enqueue(src);
+            }
+        }
+
+        private AudioSource CreateSource(string name, UnityEngine.Audio.AudioMixerGroup group, bool loop, float spatial)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(transform);
+            var src = go.AddComponent<AudioSource>();
+            src.outputAudioMixerGroup = group;
+            src.loop = loop;
+            src.spatialBlend = spatial;
+            src.dopplerLevel = spatial > 0 ? 0.3f : 0f;
+            return src;
+        }
+
+        public void PlayAmbient(bool isNight)
+        {
+            ambientSource.clip = isNight ? cityNightAmbience : citySunnyAmbience;
+            if (!ambientSource.isPlaying) ambientSource.Play();
+        }
+
+        public void SetRain(bool active, float volume = 0.7f)
+        {
+            rainSource.clip = rainLoop;
+            rainSource.volume = volume;
+            if (active && !rainSource.isPlaying) rainSource.Play();
+            else if (!active) rainSource.Stop();
+        }
+
+        /// <summary>Play a positioned one-shot (crashes, doors, footsteps) using pooled sources.</summary>
+        public void PlayOneShotAt(AudioClip clip, Vector3 position, float volume = 1f)
+        {
+            if (clip == null || pooledOneShots.Count == 0) return;
+            var src = pooledOneShots.Dequeue();
+            src.transform.position = position;
+            src.clip = clip;
+            src.volume = volume;
+            src.Play();
+            pooledOneShots.Enqueue(src); // recycle immediately; fine for short SFX given pool size
+        }
+    }
+}
